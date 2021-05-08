@@ -10,22 +10,16 @@ use crypto_box::{
     SecretKey as BoxSecret,
 };
 
-type BoxKeyPair = (crypto_box::SecretKey, crypto_box::PublicKey);
-pub(crate) struct DisconnectedUser {
-    id_keypair: BoxKeyPair,
-}
+pub(crate) struct DisconnectedUser(BoxSecret);
 
 impl DisconnectedUser {
     fn into_connected(self, partner_key: &PublicKey) -> ConnectedUser {
-        let chat_crypto_box = CryptoBox::new(partner_key, &self.id_keypair.0);
-        ConnectedUser {
-            id_keypair: self.id_keypair,
-            chat_crypto_box,
-        }
+        let chat_crypto_box = CryptoBox::new(partner_key, &self.0);
+        ConnectedUser(chat_crypto_box)
     }
 
-    fn public_key(&self) -> &PublicKey {
-        &self.id_keypair.1
+    fn public_key(&self) -> PublicKey {
+        self.0.public_key()
     }
 }
 
@@ -33,26 +27,17 @@ impl Default for DisconnectedUser {
     fn default() -> Self {
         let mut rng = rand::thread_rng();
         let secret = BoxSecret::generate(&mut rng);
-        let public = secret.public_key();
-        Self {
-            id_keypair: (secret, public),
-        }
+        Self(secret)
     }
 }
 
 impl From<BoxSecret> for DisconnectedUser {
     fn from(secret: BoxSecret) -> Self {
-        let public = secret.public_key();
-        Self {
-            id_keypair: (secret, public),
-        }
+        Self(secret)
     }
 }
 
-pub(crate) struct ConnectedUser {
-    id_keypair: BoxKeyPair,
-    chat_crypto_box: CryptoBox,
-}
+pub(crate) struct ConnectedUser(CryptoBox);
 
 pub(crate) struct EncryptedMessage {
     ciphertext: Vec<u8>,
@@ -60,21 +45,19 @@ pub(crate) struct EncryptedMessage {
 }
 
 impl ConnectedUser {
-    fn into_disconnected(self) -> DisconnectedUser {
-        DisconnectedUser {
-            id_keypair: self.id_keypair,
-        }
+    fn disconnect(self) -> DisconnectedUser {
+        DisconnectedUser::default()
     }
 
     fn encrypt_message(&self, message_plaintext: &[u8]) -> Result<EncryptedMessage, Error> {
         let mut rng = rand::thread_rng();
         let nonce = generate_nonce(&mut rng);
-        let ciphertext = self.chat_crypto_box.encrypt(&nonce, message_plaintext)?;
+        let ciphertext = self.0.encrypt(&nonce, message_plaintext)?;
         Ok(EncryptedMessage { ciphertext, nonce })
     }
 
     fn decrypt_message(&self, incoming_message: EncryptedMessage) -> Result<Vec<u8>, Error> {
-        self.chat_crypto_box.decrypt(
+        self.0.decrypt(
             &incoming_message.nonce,
             incoming_message.ciphertext.as_slice(),
         )
@@ -89,7 +72,7 @@ mod tests {
         let alice = DisconnectedUser::default();
         let bob = DisconnectedUser::default();
 
-        alice.into_connected(bob.public_key())
+        alice.into_connected(&bob.public_key())
     }
     #[test]
     fn encrypted_text_not_match_plaintext() {
